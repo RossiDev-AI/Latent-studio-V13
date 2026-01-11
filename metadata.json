@@ -1,0 +1,7 @@
+{
+  "name": "Latent Studio v13 Industrial Core",
+  "description": "Multi-Agent Image/Video Orchestrator featuring LGN Post-Production and Strict DNA Preservation protocols.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
