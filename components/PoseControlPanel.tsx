@@ -1,6 +1,6 @@
 
 import React, { useRef, useState, useEffect } from 'react';
-import { PoseData, VaultItem, WarpMethod, CategorizedDNA } from '../types';
+import { PoseData, VaultItem, WarpMethod, CategorizedDNA, AppSettings } from '../types';
 import { extractDeepDNA } from '../geminiService';
 import PoseSkeletonVisualizer from './PoseSkeletonVisualizer';
 
@@ -10,13 +10,15 @@ interface PoseControlPanelProps {
   vault: VaultItem[];
   sourceImage: string | null;
   onExecuteSurgical?: () => void;
+  // Fix: Added settings prop
+  settings?: AppSettings;
 }
 
 // MediaPipe Pose Global References
 declare var Pose: any;
 
 const PoseControlPanel: React.FC<PoseControlPanelProps> = ({ 
-  poseControl, setPoseControl, vault, sourceImage, onExecuteSurgical 
+  poseControl, setPoseControl, vault, sourceImage, onExecuteSurgical, settings
 }) => {
   const fileRef = useRef<HTMLInputElement>(null);
   const [isExtracting, setIsExtracting] = useState(false);
@@ -61,7 +63,8 @@ const PoseControlPanel: React.FC<PoseControlPanelProps> = ({
         // AUTO BIOPSY FOR POSE
         setIsExtracting(true);
         try {
-          const dna = await extractDeepDNA(result);
+          // Fix: Added settings to extractDeepDNA call
+          const dna = await extractDeepDNA(result, settings);
           setPoseControl({
             ...basePose,
             dna,

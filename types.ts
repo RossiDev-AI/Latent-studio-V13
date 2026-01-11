@@ -23,6 +23,13 @@ export type AgentType =
   | 'Grading Specialist' | 'Chroma Manager' | 'Frequency Analyst'
   | 'Timeline Editor' | 'Audio Synchronizer' | 'Script Analyzer';
 
+export interface AppSettings {
+  googleApiKey: string;
+  pexelsApiKey: string;
+  unsplashAccessKey: string;
+  pixabayApiKey: string;
+}
+
 export type VaultDomain = 'X' | 'Y' | 'Z' | 'L';
 
 export interface SubtitleSettings {

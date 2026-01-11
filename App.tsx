@@ -7,7 +7,8 @@ import FusionLab from './components/FusionLab';
 import CinemaLab from './components/CinemaLab';
 import CreationLab from './components/CreationLab';
 import GradingLab from './components/GradingLab';
-import { VaultItem, AgentStatus, LatentParams, LatentGrading, VisualAnchor, CinemaProject, SubtitleSettings } from './types';
+import SettingsLab from './components/SettingsLab';
+import { VaultItem, AgentStatus, LatentParams, LatentGrading, VisualAnchor, CinemaProject, SubtitleSettings, AppSettings } from './types';
 import { getAllNodes, saveNode, deleteNode } from './dbService';
 
 const DEFAULT_PARAMS: LatentParams = {
@@ -41,9 +42,21 @@ const DEFAULT_SUBTITLES: SubtitleSettings = {
   marginMult: 2.5
 };
 
+const DEFAULT_SETTINGS: AppSettings = {
+  googleApiKey: '',
+  pexelsApiKey: '',
+  unsplashAccessKey: '',
+  pixabayApiKey: ''
+};
+
 const App: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'creation' | 'workspace' | 'vault' | 'manual' | 'fusion' | 'cinema' | 'grading'>('creation');
+  const [activeTab, setActiveTab] = useState<'creation' | 'workspace' | 'vault' | 'manual' | 'fusion' | 'cinema' | 'grading' | 'settings'>('creation');
   const [vaultItems, setVaultItems] = useState<VaultItem[]>([]);
+  const [appSettings, setAppSettings] = useState<AppSettings>(() => {
+    const saved = localStorage.getItem('lcp_app_settings');
+    return saved ? JSON.parse(saved) : DEFAULT_SETTINGS;
+  });
+  
   const [studioPrompt, setStudioPrompt] = useState('');
   const [studioCurrentImage, setStudioCurrentImage] = useState<string | null>(null);
   const [studioOriginalSource, setStudioOriginalSource] = useState<string | null>(null);
@@ -70,6 +83,10 @@ const App: React.FC = () => {
   const [cinemaCredits, setCinemaCredits] = useState('');
   const [cinemaLogs, setCinemaLogs] = useState<AgentStatus[]>([]);
   const [cinemaActiveBeatIndex, setCinemaActiveBeatIndex] = useState(0);
+
+  useEffect(() => {
+    localStorage.setItem('lcp_app_settings', JSON.stringify(appSettings));
+  }, [appSettings]);
 
   const fetchVault = useCallback(async () => {
     try {
@@ -224,10 +241,11 @@ const App: React.FC = () => {
           <NavItem id="fusion" label="Fusion" />
           <NavItem id="manual" label="Indexer" />
           <NavItem id="vault" label={`Vault (${vaultItems.length})`} />
+          <NavItem id="settings" label="Config" />
         </nav>
 
         <div className="md:hidden flex items-center gap-2">
-            <div className="px-1.5 py-0.5 rounded bg-white/5 border border-white/10 text-[7px] mono text-zinc-500 uppercase">Kernel: V12 Active</div>
+            <div className="px-1.5 py-0.5 rounded bg-white/5 border border-white/10 text-[7px] mono text-zinc-500 uppercase">Kernel: V13 Active</div>
         </div>
       </header>
 
@@ -245,6 +263,7 @@ const App: React.FC = () => {
                 setParams={setStudioParams}
                 onReset={executeHardReset}
                 vault={vaultItems}
+                settings={appSettings}
               />
             )}
             {activeTab === 'workspace' && (
@@ -254,6 +273,7 @@ const App: React.FC = () => {
                 originalSource={studioOriginalSource} setOriginalSource={setStudioOriginalSource}
                 logs={studioLogs} setLogs={setStudioLogs} params={studioParams} setParams={setStudioParams}
                 onReloadApp={executeHardReset} grading={studioGrading} visualAnchor={studioVisualAnchor}
+                settings={appSettings}
               />
             )}
             {activeTab === 'grading' && (
@@ -280,11 +300,13 @@ const App: React.FC = () => {
                 activeBeatIndex={cinemaActiveBeatIndex}
                 setActiveBeatIndex={setCinemaActiveBeatIndex}
                 onReset={handleCinemaReset}
+                settings={appSettings}
               />
             )}
-            {activeTab === 'fusion' && <FusionLab vault={vaultItems} onResult={handleFusionResult} />}
-            {activeTab === 'manual' && <ManualNode onSave={handleSaveToVault} />}
+            {activeTab === 'fusion' && <FusionLab vault={vaultItems} onResult={handleFusionResult} settings={appSettings} />}
+            {activeTab === 'manual' && <ManualNode onSave={handleSaveToVault} settings={appSettings} />}
             {activeTab === 'vault' && <Vault items={vaultItems} onDelete={handleDeleteFromVault} onClearAll={() => {}} onRefresh={fetchVault} onReload={handleReloadFromVault} />}
+            {activeTab === 'settings' && <SettingsLab settings={appSettings} setSettings={setAppSettings} />}
           </Suspense>
         )}
       </main>
@@ -292,11 +314,9 @@ const App: React.FC = () => {
       <nav className="md:hidden fixed bottom-0 left-0 right-0 z-[400] bg-black/90 backdrop-blur-xl border-t border-white/10 h-16 flex items-center justify-around px-0.5 shadow-2xl">
         <NavItem id="creation" label="Creation" icon={<svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" strokeWidth={2}/></svg>} />
         <NavItem id="workspace" label="Studio" icon={<svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" strokeWidth={2}/></svg>} />
-        <NavItem id="grading" label="Grading" icon={<svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485" strokeWidth={2}/></svg>} />
+        <NavItem id="grading" label="Grading" icon={<svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343" strokeWidth={2}/></svg>} />
         <NavItem id="cinema" label="Cinema" icon={<svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" strokeWidth={2}/></svg>} />
-        <NavItem id="manual" label="Indexer" icon={<svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 4v16m8-8H4" strokeWidth={2}/></svg>} />
-        <NavItem id="fusion" label="Fusion" icon={<svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86 1.412l-1.874 1.318" strokeWidth={2}/></svg>} />
-        <NavItem id="vault" label="Vault" icon={<svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" strokeWidth={2}/></svg>} />
+        <NavItem id="settings" label="Config" icon={<svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" strokeWidth={2}/><circle cx="12" cy="12" r="3" strokeWidth={2}/></svg>} />
       </nav>
     </div>
   );

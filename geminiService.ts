@@ -1,9 +1,11 @@
 
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
-import { TimelineBeat, VaultItem, CategorizedDNA, FusionManifest, LatentParams, AgentStatus, AgentAuthority, ScoutData } from "./types";
+import { TimelineBeat, VaultItem, CategorizedDNA, FusionManifest, LatentParams, AgentStatus, AgentAuthority, ScoutData, AppSettings } from "./types";
 
-const getAI = () => {
-  return new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+// Fallback logic for Google API Key
+const getAI = (settings?: AppSettings) => {
+  const key = settings?.googleApiKey || process.env.API_KEY as string;
+  return new GoogleGenAI({ apiKey: key });
 };
 
 async function executeWithRetry<T>(fn: () => Promise<T>, retries = 3, delay = 1000): Promise<T> {
@@ -20,17 +22,119 @@ async function executeWithRetry<T>(fn: () => Promise<T>, retries = 3, delay = 10
   }
 }
 
-export async function scriptToTimeline(text: string, wordCount: number, fidelityMode: boolean = false): Promise<TimelineBeat[]> {
-  const ai = getAI();
-  const instruction = fidelityMode 
-    ? `Você é um curador de cinema. Divida o texto original em cenas curtas.
-       REGRAS CRÍTICAS: 
-       1. FIDELIDADE ABSOLUTA: Use EXATAMENTE as palavras originais. Proibido parafrasear.
-       2. SEGMENTAÇÃO: ~${wordCount} palavras por cena.
-       3. scoutQuery: Crie uma lista de 2-3 palavras-chave visuais em inglês que definam a cena.`
-    : `Analise este roteiro e transforme-o em cenas documentais.
-       1. caption: Narração em Português (~${wordCount} palavras).
-       2. scoutQuery: 2-3 palavras-chave visuais fundamentais em inglês.`;
+// --- STOCK API HANDLERS ---
+
+async function fetchFromPexels(query: string, apiKey: string): Promise<string | null> {
+  try {
+    const resp = await fetch(`https://api.pexels.com/v1/search?query=${encodeURIComponent(query)}&per_page=1&orientation=landscape`, {
+      headers: { Authorization: apiKey }
+    });
+    const data = await resp.json();
+    return data.photos?.[0]?.src?.large2x || null;
+  } catch (e) { return null; }
+}
+
+async function fetchFromUnsplash(query: string, accessKey: string): Promise<string | null> {
+  try {
+    const resp = await fetch(`https://api.unsplash.com/search/photos?query=${encodeURIComponent(query)}&per_page=1&orientation=landscape&client_id=${accessKey}`);
+    const data = await resp.json();
+    return data.results?.[0]?.urls?.regular || null;
+  } catch (e) { return null; }
+}
+
+async function fetchFromPixabay(query: string, apiKey: string): Promise<string | null> {
+  try {
+    const resp = await fetch(`https://pixabay.com/api/?key=${apiKey}&q=${encodeURIComponent(query)}&image_type=photo&per_page=3&orientation=horizontal`);
+    const data = await resp.json();
+    return data.hits?.[0]?.largeImageURL || null;
+  } catch (e) { return null; }
+}
+
+// --- END STOCK API HANDLERS ---
+
+export async function scoutMediaForBeat(
+  query: string, 
+  fullCaption: string, 
+  settings?: AppSettings, 
+  targetProvider?: 'PEXELS' | 'UNSPLASH' | 'PIXABAY' | 'GEMINI'
+): Promise<{ assetUrl: string | null, source: string, title: string }> {
+  const ai = getAI(settings);
+  
+  // 1. REFINAMENTO DE INTENÇÃO (O coração da correção de contexto)
+  const intentResponse: GenerateContentResponse = await executeWithRetry(() => ai.models.generateContent({
+    model: "gemini-3-flash-preview",
+    contents: `TEXT: "${fullCaption}".
+               TASK: Create a literal visual search string in English for a STOCK PHOTO site.
+               STRATEGY: 
+               - Identify the primary subject (human, animal, or object).
+               - Identify the literal action (kissing a flower, picking a leaf).
+               - EXCLUDE METAPHORS: If the text says "calling a flower woman", the image is "man holding flower".
+               - GENDER ACCURACY: If the subject is 'O homem' (the man), the image MUST feature a man.
+               
+               Return ONLY a concise 3-5 word phrase.`,
+  }));
+  
+  const literalQuery = intentResponse.text?.trim().replace(/"/g, '') || query;
+
+  // Lógica de Prioridade ou Escolha Direta
+  const pexelsKey = settings?.pexelsApiKey || process.env.PEXELS_API_KEY;
+  const unsplashKey = settings?.unsplashAccessKey || process.env.UNSPLASH_ACCESS_KEY;
+  const pixabayKey = settings?.pixabayApiKey || process.env.PIXABAY_API_KEY;
+
+  // 2. TENTAR PEXELS (Ou se for o escolhido)
+  if ((!targetProvider || targetProvider === 'PEXELS') && pexelsKey) {
+    const img = await fetchFromPexels(literalQuery, pexelsKey);
+    if (img) return { assetUrl: img, source: "Pexels", title: `Search: ${literalQuery}` };
+  }
+
+  // 3. TENTAR UNSPLASH (Ou se for o escolhido)
+  if ((!targetProvider || targetProvider === 'UNSPLASH') && unsplashKey) {
+    const img = await fetchFromUnsplash(literalQuery, unsplashKey);
+    if (img) return { assetUrl: img, source: "Unsplash", title: `Search: ${literalQuery}` };
+  }
+
+  // 4. TENTAR PIXABAY (Ou se for o escolhido)
+  if ((!targetProvider || targetProvider === 'PIXABAY') && pixabayKey) {
+    const img = await fetchFromPixabay(literalQuery, pixabayKey);
+    if (img) return { assetUrl: img, source: "Pixabay", title: `Search: ${literalQuery}` };
+  }
+
+  // 5. FALLBACK GEMINI GOOGLE SEARCH (Ou se for o escolhido)
+  if (!targetProvider || targetProvider === 'GEMINI') {
+      const searchResponse: GenerateContentResponse = await executeWithRetry(() => ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: `Find a direct public .jpg or .png URL for: "${literalQuery} professional photography high resolution". NO REDIRECTS.`,
+        config: { tools: [{ googleSearch: {} }] }
+      }));
+
+      const metadata = searchResponse.candidates?.[0]?.groundingMetadata;
+      const chunks = metadata?.groundingChunks || [];
+      const validChunk = chunks.find(c => c.web?.uri && !c.web.uri.includes('vertex') && !c.web.uri.includes('cloud.google'));
+      
+      const sourceLink = validChunk?.web?.uri || "";
+      const sourceTitle = validChunk?.web?.title || "Web Search";
+
+      const imageExtractor: GenerateContentResponse = await executeWithRetry(() => ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: `Find a direct high-quality image URL from these results for "${literalQuery}". Ends in .jpg/png. Return ONLY the URL or 'null'.`,
+      }));
+
+      const foundUrl = imageExtractor.text?.trim();
+      const validImageUrl = (foundUrl && foundUrl.startsWith('http') && (foundUrl.match(/\.(jpg|jpeg|png|webp)/i) || foundUrl.includes('wikimedia'))) 
+        ? foundUrl 
+        : null;
+
+      return { assetUrl: validImageUrl, source: validImageUrl ? "Web Direct" : "Google", title: sourceTitle };
+  }
+
+  return { assetUrl: null, source: "None", title: "No result found" };
+}
+
+export async function scriptToTimeline(text: string, wordCount: number, fidelityMode: boolean = false, settings?: AppSettings): Promise<TimelineBeat[]> {
+  const ai = getAI(settings);
+  const instruction = `Analise este roteiro e transforme-o em cenas documentais.
+       1. caption: Texto em Português (~${wordCount} palavras).
+       2. scoutQuery: Literal English description for stock images. (e.g. "man picking flowers" NOT "man kissing woman-flower")`;
 
   const response: GenerateContentResponse = await executeWithRetry(() => ai.models.generateContent({
     model: "gemini-3-flash-preview",
@@ -65,18 +169,18 @@ export async function scriptToTimeline(text: string, wordCount: number, fidelity
   }));
 }
 
-export async function getGlobalVisualPrompt(text: string): Promise<string> {
-  const ai = getAI();
+export async function getGlobalVisualPrompt(text: string, settings?: AppSettings): Promise<string> {
+  const ai = getAI(settings);
   const response: GenerateContentResponse = await executeWithRetry(() => ai.models.generateContent({
     model: "gemini-3-flash-preview",
-    contents: `Extraia 2 palavras-chave visuais para este roteiro: "${text}"`,
+    contents: `Extraia intenção visual literal em inglês (3 palavras): "${text}"`,
   }));
   return response.text || "Cinematic atmosphere";
 }
 
-export async function matchVaultForBeat(caption: string, vault: VaultItem[]): Promise<VaultItem | null> {
+export async function matchVaultForBeat(caption: string, vault: VaultItem[], settings?: AppSettings): Promise<VaultItem | null> {
   if (vault.length === 0) return null;
-  const ai = getAI();
+  const ai = getAI(settings);
   const vaultSummaries = vault.map(v => ({ id: v.id, prompt: v.prompt }));
   const response: GenerateContentResponse = await executeWithRetry(() => ai.models.generateContent({
     model: "gemini-3-flash-preview",
@@ -94,12 +198,12 @@ export async function matchVaultForBeat(caption: string, vault: VaultItem[]): Pr
   return vault.find(v => v.id === result.winner_id) || null;
 }
 
-export async function generateImageForBeat(caption: string, scoutQuery: string): Promise<string> {
-  const ai = getAI();
+export async function generateImageForBeat(caption: string, scoutQuery: string, settings?: AppSettings): Promise<string> {
+  const ai = getAI(settings);
   const response: GenerateContentResponse = await executeWithRetry(() => ai.models.generateContent({
     model: 'gemini-2.5-flash-image',
     contents: { 
-      parts: [{ text: `Professional cinematic photograph, documentary style, keywords: ${scoutQuery}. ${caption}. High resolution.` }] 
+      parts: [{ text: `Professional cinematic photograph, literal scene: ${scoutQuery}. ${caption}.` }] 
     },
     config: { imageConfig: { aspectRatio: "16:9" } }
   }));
@@ -113,46 +217,8 @@ export async function generateImageForBeat(caption: string, scoutQuery: string):
   return imageUrl;
 }
 
-/**
- * SCOUT MODE: Agora busca imagens reais na web em vez de gerar.
- */
-export async function scoutMediaForBeat(query: string, fullCaption: string): Promise<{ assetUrl: string | null, source: string, title: string }> {
-  const ai = getAI();
-  
-  // 1. Extração de Keywords concisas para busca de imagens
-  const keywordResponse: GenerateContentResponse = await executeWithRetry(() => ai.models.generateContent({
-    model: "gemini-3-flash-preview",
-    contents: `Based on: "${query} ${fullCaption}", extract only 2 essential visual search keywords in English.`,
-  }));
-  const searchKeywords = keywordResponse.text?.trim() || query;
-
-  // 2. Pesquisa Web com foco em referências reais
-  const searchResponse: GenerateContentResponse = await executeWithRetry(() => ai.models.generateContent({
-    model: "gemini-3-flash-preview",
-    contents: `Find high-quality direct image references for: "${searchKeywords}". Provide context and source links.`,
-    config: { tools: [{ googleSearch: {} }] }
-  }));
-
-  const metadata = searchResponse.candidates?.[0]?.groundingMetadata;
-  const sourceLink = metadata?.groundingChunks?.[0]?.web?.uri || "";
-  const sourceTitle = metadata?.groundingChunks?.[0]?.web?.title || "Web Reference";
-  
-  // 3. Tentar encontrar uma URL direta de imagem (via modelo que "lê" a busca)
-  const imageFinder: GenerateContentResponse = await executeWithRetry(() => ai.models.generateContent({
-    model: "gemini-3-flash-preview",
-    contents: `From the search context of "${searchKeywords}", find a valid direct public image URL (like Wikimedia, Unsplash, etc). Return ONLY the raw URL string. If not found, return 'null'.`,
-  }));
-
-  const foundUrl = imageFinder.text?.trim();
-  const validImageUrl = (foundUrl && foundUrl.startsWith('http') && (foundUrl.includes('jpg') || foundUrl.includes('png') || foundUrl.includes('webp') || foundUrl.includes('wikimedia'))) 
-    ? foundUrl 
-    : null;
-
-  return { assetUrl: validImageUrl, source: sourceLink, title: sourceTitle };
-}
-
-export async function extractDeepDNA(imageUrl: string): Promise<CategorizedDNA> {
-  const ai = getAI();
+export async function extractDeepDNA(imageUrl: string, settings?: AppSettings): Promise<CategorizedDNA> {
+  const ai = getAI(settings);
   const base64 = imageUrl.includes(',') ? imageUrl.split(',')[1] : imageUrl;
   const response: GenerateContentResponse = await executeWithRetry(() => ai.models.generateContent({
     model: "gemini-3-flash-preview",
@@ -180,8 +246,8 @@ export async function extractDeepDNA(imageUrl: string): Promise<CategorizedDNA> 
   return JSON.parse(response.text || "{}");
 }
 
-export async function executeGroundedSynth(prompt: string, weights: any, vault: VaultItem[], authority: AgentAuthority): Promise<any> {
-  const ai = getAI();
+export async function executeGroundedSynth(prompt: string, weights: any, vault: VaultItem[], authority: AgentAuthority, settings?: AppSettings): Promise<any> {
+  const ai = getAI(settings);
   const planning: GenerateContentResponse = await executeWithRetry(() => ai.models.generateContent({
     model: "gemini-3-flash-preview",
     contents: `Plan synthesis for: "${prompt}".`,
@@ -197,7 +263,7 @@ export async function executeGroundedSynth(prompt: string, weights: any, vault: 
     }
   }));
   const plan = JSON.parse(planning.text || "{}");
-  const imageUrl = await generateImageForBeat(plan.enhancedPrompt || prompt, prompt);
+  const imageUrl = await generateImageForBeat(plan.enhancedPrompt || prompt, prompt, settings);
   return {
     imageUrl,
     logs: (plan.logs || []).map((l: any) => ({ ...l, timestamp: Date.now() })),
@@ -206,8 +272,8 @@ export async function executeGroundedSynth(prompt: string, weights: any, vault: 
   };
 }
 
-export async function optimizeVisualPrompt(prompt: string): Promise<string> {
-  const ai = getAI();
+export async function optimizeVisualPrompt(prompt: string, settings?: AppSettings): Promise<string> {
+  const ai = getAI(settings);
   const response: GenerateContentResponse = await executeWithRetry(() => ai.models.generateContent({
     model: "gemini-3-flash-preview",
     contents: `Optimize visual prompt: "${prompt}"`
@@ -215,9 +281,9 @@ export async function optimizeVisualPrompt(prompt: string): Promise<string> {
   return response.text || prompt;
 }
 
-export async function executeFusion(manifest: FusionManifest, vault: VaultItem[]): Promise<any> {
+export async function executeFusion(manifest: FusionManifest, vault: VaultItem[], settings?: AppSettings): Promise<any> {
   const prompt = `Merge character identity ${manifest.pep_id} with pose ${manifest.pop_id}.`;
-  const imageUrl = await generateImageForBeat(prompt, manifest.fusionIntent);
+  const imageUrl = await generateImageForBeat(prompt, manifest.fusionIntent, settings);
   return {
     imageUrl,
     params: { neural_metrics: { consensus_score: 1.0 } },
@@ -225,16 +291,13 @@ export async function executeFusion(manifest: FusionManifest, vault: VaultItem[]
   };
 }
 
-export async function autoOptimizeFusion(intent: string, manifest: FusionManifest, vault: VaultItem[]): Promise<any> { return { manifest }; }
-export async function visualAnalysisJudge(imageUrl: string, intent: string, referenceUrl?: string): Promise<any> { return { score: 0.9, critique: "Good.", suggestion: "" }; }
-export async function refinePromptDNA(intent: string): Promise<any> {
-  const ai = getAI();
+export async function autoOptimizeFusion(intent: string, manifest: FusionManifest, vault: VaultItem[], settings?: AppSettings): Promise<any> { return { manifest }; }
+export async function visualAnalysisJudge(imageUrl: string, intent: string, referenceUrl?: string, settings?: AppSettings): Promise<any> { return { score: 0.9, critique: "Good.", suggestion: "" }; }
+export async function refinePromptDNA(intent: string, settings?: AppSettings): Promise<any> {
+  const ai = getAI(settings);
   const response: GenerateContentResponse = await executeWithRetry(() => ai.models.generateContent({
     model: "gemini-3-flash-preview",
     contents: `Refine intent: "${intent}"`
   }));
   return { refined: response.text || intent, logs: [] };
 }
-export async function orchestratePrompt(...args: any[]) {}
-export async function routeSemanticAssets(...args: any[]) {}
-export async function suggestScoutWeights(...args: any[]) {}

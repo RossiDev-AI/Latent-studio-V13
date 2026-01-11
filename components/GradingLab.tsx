@@ -2,6 +2,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { VaultItem, LatentGrading } from '../types';
 
+// Subcomponents
+import GradingPreview from './gradingLab/GradingPreview';
+import GradingToolbar from './gradingLab/GradingToolbar';
+import GradingNavigation from './gradingLab/GradingNavigation';
+import GradingControls from './gradingLab/GradingControls';
+import GradingQueue from './gradingLab/GradingQueue';
+
 interface GradingLabProps {
   vault: VaultItem[];
   onSave: (item: VaultItem) => Promise<void>;
@@ -158,11 +165,13 @@ const GradingLab: React.FC<GradingLabProps> = ({ vault, onSave }) => {
 
   const handleDownload = async () => {
     if (!selectedNode) return;
-    const url = await bakeImage();
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `LCP_MASTER_${selectedNode.shortId}_${grading.preset_name}.png`;
-    link.click();
+    try {
+      const url = await bakeImage();
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `LCP_MASTER_${selectedNode.shortId}_${grading.preset_name}.png`;
+      link.click();
+    } catch (e) { console.error(e); }
   };
 
   const handleCommit = async () => {
@@ -172,6 +181,7 @@ const GradingLab: React.FC<GradingLabProps> = ({ vault, onSave }) => {
       const bakedImageUrl = await bakeImage();
       const updatedNode = { ...selectedNode, imageUrl: bakedImageUrl, grading };
       await onSave(updatedNode);
+      window.alert("Grade committed to node.");
     } catch (e) {
       console.error(e);
     } finally {
@@ -213,11 +223,8 @@ const GradingLab: React.FC<GradingLabProps> = ({ vault, onSave }) => {
     { key: 'grayscale', label: 'Tonal Value', min: 0, max: 1, step: 0.01, group: 'OPTICAL' },
   ];
 
-  const favoriteNodes = vault.filter(item => item.isFavorite);
-
   return (
     <div className="h-full flex flex-col bg-[#050505] overflow-hidden min-h-full safe-area-inset-bottom">
-      
       <svg className="hidden">
         <filter id={`pro-grading-${selectedNode?.shortId || 'global'}`}>
             <feComponentTransfer>
@@ -228,129 +235,51 @@ const GradingLab: React.FC<GradingLabProps> = ({ vault, onSave }) => {
         </filter>
       </svg>
 
-      {/* Preview Section */}
-      <div className="flex-1 min-h-[40vh] bg-black flex flex-col items-center justify-center relative p-2 md:p-12 border-b border-white/5 overflow-hidden">
-        {!selectedNode ? (
-          <div className="text-center opacity-20">
-            <svg className="w-10 h-10 mx-auto text-zinc-600 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 2v20M2 12h20" strokeWidth={1}/></svg>
-            <p className="text-[7px] uppercase font-black tracking-widest text-zinc-400">Target Node Required</p>
-          </div>
-        ) : (
-          <div className="relative w-full h-full flex flex-col items-center justify-center">
-            <div 
-              ref={containerRef}
-              className="relative group max-w-full max-h-full cursor-ew-resize select-none overflow-hidden rounded-xl shadow-[0_0_80px_rgba(0,0,0,0.8)] border border-white/5"
-              onMouseMove={(e) => isResizing && handleSliderMove(e)}
-              onMouseDown={() => setIsResizing(true)}
-              onMouseUp={() => setIsResizing(false)}
-              onMouseLeave={() => setIsResizing(false)}
-              onTouchMove={(e) => handleSliderMove(e)}
-            >
-              <img src={selectedNode.originalImageUrl || selectedNode.imageUrl} className="max-w-full max-h-[46vh] md:max-h-[70vh] w-auto h-auto block" alt="Raw" />
-              <div className="absolute inset-0 pointer-events-none overflow-hidden" style={{ clipPath: `inset(0 ${100 - sliderPosition}% 0 0)` }}>
-                <div className="relative w-full h-full">
-                    <img 
-                      src={selectedNode.originalImageUrl || selectedNode.imageUrl} 
-                      className="max-w-none max-h-[46vh] md:max-h-[70vh] w-auto h-auto block" 
-                      style={{ filter: grading.css_filter_string, width: containerRef.current?.clientWidth, height: containerRef.current?.clientHeight }} 
-                      alt="Master" 
-                    />
-                    <div className="absolute inset-0 pointer-events-none mix-blend-screen opacity-20" style={{ background: `radial-gradient(circle, white 0%, transparent 70%)`, opacity: grading.bloom * 0.4, filter: 'blur(20px)' }} />
-                    <div className="absolute inset-0 pointer-events-none mix-blend-multiply" style={{ backgroundColor: `rgb(${grading.tint_r * 255}, ${grading.tint_g * 255}, ${grading.tint_b * 255})`, opacity: 0.25 }} />
-                    <div className="absolute inset-0 transition-opacity pointer-events-none" style={{ opacity: grading.vignette, background: 'radial-gradient(circle, transparent 20%, black 140%)' }} />
-                </div>
-              </div>
-              <div className="absolute inset-y-0 w-[1px] bg-white/40 backdrop-blur-md z-50 pointer-events-none" style={{ left: `${sliderPosition}%` }} />
-            </div>
+      <GradingPreview 
+        selectedNode={selectedNode} 
+        grading={grading} 
+        sliderPosition={sliderPosition} 
+        isResizing={isResizing} 
+        onSliderMove={handleSliderMove} 
+        onStartResizing={() => setIsResizing(true)} 
+        onStopResizing={() => setIsResizing(false)} 
+        containerRef={containerRef} 
+      />
 
-            {/* Compact Action Bar */}
-            <div className="flex gap-2 mt-3 z-50">
-               <button onClick={handleCommit} disabled={isSaving} className="px-3 py-2 bg-indigo-600 text-white rounded-lg text-[8px] font-black uppercase tracking-widest shadow-xl flex items-center gap-2 active:scale-95 transition-all">
-                 <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" strokeWidth={3}/></svg>
-                 Commit
-               </button>
-               <button onClick={handleDownload} className="px-3 py-2 bg-zinc-100 text-black rounded-lg text-[8px] font-black uppercase tracking-widest shadow-xl flex items-center gap-2 active:scale-95 transition-all">
-                 <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" strokeWidth={2}/></svg>
-                 Export
-               </button>
-               <button onClick={() => setGrading(INITIAL_GRADING)} className="px-2 py-2 bg-zinc-900 border border-white/5 text-zinc-600 rounded-lg text-[8px] font-black uppercase tracking-widest hover:text-white transition-all">
-                 Reset
-               </button>
-            </div>
-          </div>
-        )}
-      </div>
+      <GradingToolbar 
+        onCommit={handleCommit} 
+        onDownload={handleDownload} 
+        onReset={() => setGrading(INITIAL_GRADING)} 
+        isSaving={isSaving} 
+        disabled={!selectedNode} 
+      />
 
-      {/* Controls Area */}
       <div className="bg-[#0b0b0d] border-t border-white/5 flex flex-col h-auto">
-        <div className="flex justify-around border-b border-white/5 py-1 bg-black/40">
-           {categories.map((cat) => (
-             <button key={cat.id} onClick={() => setActiveCategory(cat.id)} className={`flex flex-col items-center p-2 transition-all flex-1 ${activeCategory === cat.id ? 'text-indigo-400' : 'text-zinc-600'}`}>
-                {cat.icon}
-                <span className="text-[7px] font-black uppercase mt-1 tracking-tighter">{cat.label}</span>
-                {activeCategory === cat.id && <div className="w-4 h-0.5 bg-indigo-400 mt-1 rounded-full" />}
-             </button>
-           ))}
-        </div>
+        <GradingNavigation 
+          categories={categories} 
+          activeCategory={activeCategory} 
+          setActiveCategory={setActiveCategory} 
+        />
 
-        <div className="p-3 md:p-6 space-y-3 overflow-y-auto max-h-[30vh] custom-scrollbar">
-           {activeCategory === 'FILM' ? (
-             <div className="space-y-4">
-                {/* Save LUT Section */}
-                <div className="flex gap-2 bg-black/40 p-2 rounded-xl border border-white/5">
-                   <input type="text" value={newLutName} onChange={(e) => setNewLutName(e.target.value.toUpperCase())} placeholder="NEW PRESET NAME..." className="flex-1 bg-transparent text-[8px] mono text-white outline-none font-black px-2" />
-                   <button onClick={handleSaveLut} disabled={!newLutName.trim()} className="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-[7px] font-black uppercase tracking-widest active:scale-95">Save</button>
-                </div>
+        <GradingControls 
+          activeCategory={activeCategory} 
+          grading={grading} 
+          updateParam={updateParam} 
+          applyPreset={applyPreset} 
+          filmStocks={FILM_STOCKS} 
+          customLuts={customLuts} 
+          handleSaveLut={handleSaveLut} 
+          handleRemoveLut={handleRemoveLut} 
+          newLutName={newLutName} 
+          setNewLutName={setNewLutName} 
+          controls={controls} 
+        />
 
-                <div className="grid grid-cols-2 gap-2 pb-4">
-                   <div className="col-span-2 text-[7px] font-black text-zinc-600 uppercase tracking-widest px-1">Industry Emulations</div>
-                   {FILM_STOCKS.map((stock) => (
-                     <button key={stock.name} onClick={() => applyPreset(stock)} className={`relative h-11 rounded-lg border transition-all overflow-hidden flex flex-col items-center justify-center ${grading.preset_name === stock.name ? 'border-indigo-500 bg-indigo-500/10' : 'border-white/5 bg-zinc-900/40'}`}>
-                        <span className={`text-[8px] font-black uppercase tracking-widest relative z-10 ${grading.preset_name === stock.name ? 'text-white' : 'text-zinc-500'}`}>{stock.name}</span>
-                     </button>
-                   ))}
-                   
-                   {customLuts.length > 0 && (
-                     <>
-                        <div className="col-span-2 text-[7px] font-black text-zinc-600 uppercase tracking-widest px-1 mt-2">Vault Presets</div>
-                        {customLuts.map((lut, idx) => (
-                          <div key={idx} className="relative group">
-                            <button onClick={() => applyPreset(lut)} className={`w-full h-11 rounded-lg border transition-all overflow-hidden flex flex-col items-center justify-center ${grading.preset_name === lut.name ? 'border-indigo-500 bg-indigo-500/10' : 'border-white/5 bg-zinc-900/40'}`}>
-                               <span className={`text-[8px] font-black uppercase tracking-widest relative z-10 ${grading.preset_name === lut.name ? 'text-white' : 'text-zinc-500'}`}>{lut.name}</span>
-                            </button>
-                            <button onClick={() => handleRemoveLut(lut.name)} className="absolute -top-1 -right-1 w-4 h-4 bg-red-600 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity z-20"><svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12" strokeWidth={3}/></svg></button>
-                          </div>
-                        ))}
-                     </>
-                   )}
-                </div>
-             </div>
-           ) : (
-             <div className="space-y-4 pb-4">
-                {controls.filter(c => c.group === activeCategory).map((ctrl) => (
-                   <div key={ctrl.key} className="space-y-1.5">
-                      <div className="flex justify-between items-center px-1">
-                        <span className="text-[8px] font-black text-zinc-500 uppercase tracking-widest">{ctrl.label}</span>
-                        <span className="text-[8px] mono text-indigo-400 font-bold">{(grading as any)[ctrl.key].toFixed(3)}</span>
-                      </div>
-                      <input type="range" min={ctrl.min} max={ctrl.max} step={ctrl.step} value={(grading as any)[ctrl.key]} onChange={(e) => updateParam(ctrl.key as any, parseFloat(e.target.value))} className="w-full h-1 bg-zinc-900 rounded-full appearance-none accent-indigo-500 cursor-pointer" />
-                   </div>
-                ))}
-             </div>
-           )}
-        </div>
-
-        {/* Injection Queue */}
-        <div className="p-2 bg-black border-t border-white/5">
-           <div className="flex gap-2 overflow-x-auto pb-1 custom-scrollbar scroll-smooth">
-              {favoriteNodes.map(item => (
-                <button key={item.id} onClick={() => setSelectedNode(item)} className={`flex-shrink-0 w-11 h-11 rounded-lg overflow-hidden border transition-all ${selectedNode?.id === item.id ? 'border-indigo-500 scale-105 shadow-lg' : 'border-white/10 opacity-40 hover:opacity-100'}`}>
-                   <img src={item.imageUrl} className="w-full h-full object-cover" alt="T" />
-                </button>
-              ))}
-              {favoriteNodes.length === 0 && <div className="w-full py-2 flex items-center justify-center opacity-10"><p className="text-[7px] text-zinc-500 uppercase tracking-widest">Mark favorites in Vault to inject</p></div>}
-           </div>
-        </div>
+        <GradingQueue 
+          favoriteNodes={vault.filter(item => item.isFavorite)} 
+          selectedNodeId={selectedNode?.id} 
+          onSelectNode={setSelectedNode} 
+        />
       </div>
     </div>
   );
